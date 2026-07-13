@@ -1,0 +1,74 @@
+name: Knowledge index
+
+# Regenerate AGENTS.md whenever SOURCE files change (not docs). AGENTS.md itself
+# is deliberately NOT in the trigger paths, so the regenerated-doc commit can't
+# re-trigger this workflow — no loop. (GITHUB_TOKEN pushes also don't trigger
+# workflows, and the commit carries [skip ci] — triple safety.)
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'custom_components/**'
+      - 'hacs.json'
+      - '.github/workflows/knowledge-index.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # commit the refreshed AGENTS.md
+  models: read      # call GitHub Models (free, built-in GITHUB_TOKEN — no key/subscription)
+
+concurrency:
+  group: knowledge-index
+  cancel-in-progress: true
+
+jobs:
+  regen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble repo context
+        run: |
+          {
+            echo "REPOSITORY: ${{ github.repository }}"
+            echo
+            echo "FILE TREE (source):"
+            git ls-files | grep -viE '\.(md|txt)$' || true
+            echo
+            echo "SOURCE FILES:"
+            for f in $(git ls-files 'custom_components/**' 'hacs.json'); do
+              case "$f" in
+                *.py|*.json|*.yaml|*.yml) printf '\n----- %s -----\n' "$f"; cat "$f" ;;
+              esac
+            done
+          } | head -c 28000 > "${RUNNER_TEMP}/context.txt"
+          echo "context bytes: $(wc -c < "${RUNNER_TEMP}/context.txt")"
+
+      - name: Generate AGENTS.md with GitHub Models (free)
+        id: ai
+        uses: actions/ai-inference@v2
+        with:
+          model: openai/gpt-4o-mini
+          max-completion-tokens: 2000
+          system-prompt: |
+            You generate ONE AGENTS.md knowledge base for the given codebase, for AI coding agents.
+            Telegraphic and dense, 50-150 lines. Include only sections that apply:
+            a one-line OVERVIEW; STRUCTURE (tree; comment ONLY non-obvious entries);
+            WHERE TO LOOK (task -> location table); CODE MAP (key modules/classes + their role);
+            CONVENTIONS (project-specific deviations ONLY); ANTI-PATTERNS / gotchas specific to
+            THIS project; COMMANDS; NOTES. No advice that applies to all projects, no filler.
+            Output ONLY the raw markdown (do not wrap the whole thing in a code fence).
+          prompt-file: ${{ runner.temp }}/context.txt
+
+      - name: Commit if changed
+        run: |
+          cp "${{ steps.ai.outputs.response-file }}" AGENTS.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add AGENTS.md
+          if git diff --cached --quiet; then
+            echo "AGENTS.md unchanged — nothing to commit"
+          else
+            git commit -m "docs: auto-regenerate AGENTS.md via GitHub Models [skip ci]"
+            git push
+          fi
