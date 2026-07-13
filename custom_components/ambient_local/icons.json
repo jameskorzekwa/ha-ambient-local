@@ -1,0 +1,7 @@
+{
+  "services": {
+    "reapply_console_settings": {
+      "service": "mdi:cloud-sync"
+    }
+  }
+}
