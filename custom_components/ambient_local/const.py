@@ -23,3 +23,12 @@ CONSOLE_PATH = "/?"
 # Entities go unavailable after this many missed upload intervals (min 5 min).
 STALE_INTERVAL_FACTOR = 4
 STALE_MIN_SECONDS = 300
+
+# --- Provisioning (AP-mode recovery) -----------------------------------------
+# In setup/AP mode the console broadcasts an OPEN SSID "AMBWeatherPro-<MACsuffix>"
+# and serves its web UI at 192.168.4.1.
+AP_SSID_PREFIX = "AMBWeatherPro-"
+AP_HOST = "192.168.4.1"
+# Persisted snapshot of the console's config so recovery can restore everything.
+STORE_KEY = DOMAIN + "_console_cache"
+STORE_VERSION = 1

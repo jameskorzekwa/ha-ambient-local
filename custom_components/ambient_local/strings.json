@@ -22,13 +22,52 @@
   "options": {
     "step": {
       "init": {
-        "title": "Ambient Weather Local options",
+        "title": "Ambient Weather Local",
+        "menu_options": {
+          "settings": "Settings",
+          "provision": "Recover / re-provision console"
+        }
+      },
+      "settings": {
+        "title": "Settings",
         "data": {
           "device_name": "Device name",
           "listen_port": "Listener port",
           "scan_minutes": "Console check interval (minutes)"
         }
+      },
+      "provision": {
+        "title": "Recover console",
+        "description": "Put the console in AP mode (hold the Wi-Fi/Sensor button ~6 s until 'AP' shows). Home Assistant will look for its setup network **{ap}** on a spare Wi-Fi radio.",
+        "data": {
+          "retry": "Scan again"
+        }
+      },
+      "pick": {
+        "title": "Choose the console's Wi-Fi",
+        "description": "Found the console's setup network **{ap}**. Pick the 2.4 GHz Wi-Fi it should join and enter its password. Home Assistant will provision it and restore your settings.",
+        "data": {
+          "target_ssid": "Wi-Fi network (2.4 GHz)",
+          "target_psk": "Wi-Fi password"
+        }
+      },
+      "manual": {
+        "title": "Manual setup",
+        "description": "{instructions}"
       }
+    },
+    "error": {
+      "ap_not_found": "Didn't see the console's setup network yet. Put it in AP mode and scan again.",
+      "provision_failed": "Provisioning failed: {error}"
+    },
+    "abort": {
+      "provision_done": "Sent the new settings. The console is rebooting onto your Wi-Fi — data should resume within a minute."
+    }
+  },
+  "services": {
+    "reapply_console_settings": {
+      "name": "Re-apply console settings",
+      "description": "Re-write the console's Custom Server settings so it points back at Home Assistant."
     }
   }
 }

@@ -40,6 +40,26 @@ console  --(HTTP push: GET /?tempf=..&humidity=..)-->  HA listener (:8099)  --> 
 The console's `Protocol` is left on its native `amb_protocol`; the integration
 enforces `Customized=enable`, the correct HA IP, port and `path=/?`.
 
+## Console recovery / re-provisioning
+
+These consoles sometimes fully reset and drop to **AP mode** (broadcasting an open
+`AMBWeatherPro-<MAC>` network at `http://192.168.4.1`), losing their Wi-Fi. This
+integration can recover that **without a phone** — go to the integration →
+**Configure → Recover / re-provision console**:
+
+- **If Home Assistant OS has a *spare* Wi-Fi radio** (one that isn't the primary
+  connection), HA borrows it via the Supervisor network API, scans for the
+  console's setup AP, lets you pick the target 2.4 GHz network + password, then
+  joins the AP and pushes back your Wi-Fi, AmbientWeather.net email, and Custom
+  Server settings — then releases the radio. Ethernet stays primary throughout,
+  so HA never drops off the network.
+- **If there's no spare radio** (or the console isn't detected), the same screen
+  shows **exact manual instructions** (which AP to join, the URL, and every value
+  to enter), pre-filled from the cached config.
+
+The integration proactively caches the console's config (Wi-Fi **password
+excluded**) so recovery can restore everything.
+
 ## Service
 
 `ambient_local.reapply_console_settings` — force a config re-apply immediately.

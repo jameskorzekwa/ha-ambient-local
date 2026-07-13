@@ -46,13 +46,46 @@ class ConsoleClient:
 
     async def set_settings(self, payload: dict) -> None:
         """Apply weather-server settings on the console."""
-        url = f"http://{self._ip}/set_ws_settings"
+        await self._post("set_ws_settings", payload)
+
+    # --- generic helpers ---------------------------------------------------
+
+    async def _get(self, endpoint: str) -> dict:
+        url = f"http://{self._ip}/{endpoint}"
+        try:
+            async with self._session.get(url, timeout=_TIMEOUT) as resp:
+                resp.raise_for_status()
+                return await resp.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise ConsoleError(f"{endpoint} failed: {err}") from err
+
+    async def _post(self, endpoint: str, payload: dict) -> None:
+        url = f"http://{self._ip}/{endpoint}"
         try:
             async with self._session.post(url, json=payload, timeout=_TIMEOUT) as resp:
                 resp.raise_for_status()
                 await resp.read()
         except (aiohttp.ClientError, TimeoutError) as err:
-            raise ConsoleError(f"set_ws_settings failed: {err}") from err
+            raise ConsoleError(f"{endpoint} failed: {err}") from err
+
+    # --- network / device / scan (used for provisioning) -------------------
+
+    async def get_network_info(self) -> dict:
+        return await self._get("get_network_info")
+
+    async def set_network_info(self, payload: dict) -> None:
+        await self._post("set_network_info", payload)
+
+    async def get_device_info(self) -> dict:
+        return await self._get("get_device_info")
+
+    async def set_device_info(self, payload: dict) -> None:
+        await self._post("set_device_info", payload)
+
+    async def scan_ssids(self) -> list[dict]:
+        """Networks the console itself can see (used in AP/setup mode)."""
+        data = await self._get("usr_scan_ssid_list")
+        return data.get("list", [])
 
 
 def detect_local_ip(target_ip: str) -> str | None:

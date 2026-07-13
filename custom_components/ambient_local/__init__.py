@@ -43,6 +43,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     coordinator = AmbientCoordinator(hass, client, port, scan_minutes)
+    await coordinator.async_load_cache()
     listener = PushListener(port, coordinator.handle_push)
     try:
         await listener.start()

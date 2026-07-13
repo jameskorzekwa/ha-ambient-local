@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -15,6 +16,8 @@ from .const import (
     DOMAIN,
     STALE_INTERVAL_FACTOR,
     STALE_MIN_SECONDS,
+    STORE_KEY,
+    STORE_VERSION,
 )
 from .parser import parse_payload
 
@@ -46,6 +49,15 @@ class AmbientCoordinator(DataUpdateCoordinator[dict]):
         self.station_mac: str | None = None
         self.settings_ok: bool | None = None
 
+        # Persisted snapshot of the console config (Wi-Fi password stripped) so
+        # AP-mode recovery / manual instructions can restore everything.
+        self._store: Store = Store(hass, STORE_VERSION, STORE_KEY)
+        self.cached: dict = {}
+        self.ha_ip: str | None = None
+
+    async def async_load_cache(self) -> None:
+        self.cached = await self._store.async_load() or {}
+
     @callback
     def handle_push(self, raw: dict) -> None:
         """Called from the listener whenever the console sends data."""
@@ -75,12 +87,14 @@ class AmbientCoordinator(DataUpdateCoordinator[dict]):
             return
 
         self.station_mac = settings.get("sta_mac")
+        await self._snapshot_config(settings)
         ha_ip = await self.hass.async_add_executor_job(
             detect_local_ip, self.client.ip
         )
         if not ha_ip:
             _LOGGER.debug("Could not determine local IP toward console")
             return
+        self.ha_ip = ha_ip
 
         drift = (
             settings.get("Customized") != "enable"
@@ -121,6 +135,27 @@ class AmbientCoordinator(DataUpdateCoordinator[dict]):
         except ConsoleError as err:
             self.settings_ok = False
             _LOGGER.error("Failed to re-apply console settings: %s", err)
+
+    async def _snapshot_config(self, ws_settings: dict) -> None:
+        """Persist ws/network/device config (Wi-Fi password stripped)."""
+        snap: dict = {"ws": ws_settings}
+        try:
+            net = dict(await self.client.get_network_info())
+            net.pop("wifi_pwd", None)  # don't persist the secret
+            snap["network"] = net
+        except ConsoleError:
+            pass
+        try:
+            snap["device"] = await self.client.get_device_info()
+        except ConsoleError:
+            pass
+        if not self.station_mac:
+            self.station_mac = (snap.get("network") or {}).get("mac")
+        self.cached = snap
+        try:
+            await self._store.async_save(snap)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Could not persist console cache: %s", err)
 
     async def async_reapply_settings(self) -> None:
         """Force a config re-apply (used by the service)."""
