@@ -34,11 +34,16 @@ class ConsoleClient:
     def ip(self) -> str:
         return self._ip
 
-    async def get_settings(self) -> dict:
-        """Return the console's current weather-server settings."""
+    async def get_settings(self, timeout_s: float | None = None) -> dict:
+        """Return the console's current weather-server settings.
+
+        ``timeout_s`` overrides the default timeout — useful for a fast
+        reachability probe in the config flow.
+        """
         url = f"http://{self._ip}/get_ws_settings"
+        timeout = aiohttp.ClientTimeout(total=timeout_s) if timeout_s else _TIMEOUT
         try:
-            async with self._session.get(url, timeout=_TIMEOUT) as resp:
+            async with self._session.get(url, timeout=timeout) as resp:
                 resp.raise_for_status()
                 return await resp.json(content_type=None)
         except (aiohttp.ClientError, TimeoutError) as err:

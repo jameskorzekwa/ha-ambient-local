@@ -86,7 +86,8 @@ class AmbientConfigFlow(ConfigFlow, domain=DOMAIN):
                 async_get_clientsession(self.hass), user_input[CONF_CONSOLE_IP]
             )
             try:
-                settings = await client.get_settings()
+                # Fast probe so an offline console drops to AP setup quickly.
+                settings = await client.get_settings(timeout_s=4)
             except ConsoleError:
                 # Console not on the network — offer AP-mode recovery/setup.
                 return await self.async_step_recover()
