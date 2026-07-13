@@ -1,4 +1,5 @@
 """Config and options (incl. AP-mode recovery) flow for Ambient Weather Local."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +7,6 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -59,7 +59,11 @@ async def _save_console_ip(hass, ip: str) -> None:
 
 def _pick_schema(candidates: list[str], default_ssid: str) -> vol.Schema:
     ssid_field: Any = vol.In(candidates) if candidates else str
-    default = default_ssid if (not candidates or default_ssid in candidates) else candidates[0]
+    default = (
+        default_ssid
+        if (not candidates or default_ssid in candidates)
+        else candidates[0]
+    )
     return vol.Schema(
         {
             vol.Required("target_ssid", default=default): ssid_field,
@@ -233,7 +237,10 @@ class AmbientConfigFlow(ConfigFlow, domain=DOMAIN):
                         user_input["target_psk"],
                     )
                 )
-                ws = {**(cached.get("ws") or {}), "ambEmail": user_input.get("amb_email", "")}
+                ws = {
+                    **(cached.get("ws") or {}),
+                    "ambEmail": user_input.get("amb_email", ""),
+                }
                 await ap_console.set_settings(
                     build_ws_payload(ws, ha_ip, user_input[CONF_LISTEN_PORT])
                 )
@@ -245,7 +252,9 @@ class AmbientConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors={"base": "provision_failed"},
                     description_placeholders={"error": str(err), "ap": self._ap_ssid},
                 )
-            await sup.disable(self._iface)  # release the radio; console reboots to Wi-Fi
+            await sup.disable(
+                self._iface
+            )  # release the radio; console reboots to Wi-Fi
 
             mac = (cached.get("network") or {}).get("mac")
             if mac:
@@ -282,7 +291,9 @@ class AmbientConfigFlow(ConfigFlow, domain=DOMAIN):
         cached = await _load_cache(self.hass)
         mac = (cached.get("network") or {}).get("mac")
         sup = SupervisorNetwork(session) if supervisor_available() else None
-        text = manual_instructions(cached, await self._ha_ip(sup), DEFAULT_LISTEN_PORT, mac)
+        text = manual_instructions(
+            cached, await self._ha_ip(sup), DEFAULT_LISTEN_PORT, mac
+        )
         return self.async_show_form(
             step_id="manual",
             data_schema=vol.Schema({}),
@@ -306,7 +317,9 @@ class AmbientOptionsFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        return self.async_show_menu(step_id="init", menu_options=["settings", "provision"])
+        return self.async_show_menu(
+            step_id="init", menu_options=["settings", "provision"]
+        )
 
     # --- plain settings -----------------------------------------------------
 
@@ -318,9 +331,18 @@ class AmbientOptionsFlow(OptionsFlow):
         data = {**self.config_entry.data, **self.config_entry.options}
         schema = vol.Schema(
             {
-                vol.Required(CONF_DEVICE_NAME, default=data.get(CONF_DEVICE_NAME, DEFAULT_DEVICE_NAME)): str,
-                vol.Required(CONF_LISTEN_PORT, default=data.get(CONF_LISTEN_PORT, DEFAULT_LISTEN_PORT)): int,
-                vol.Required(CONF_SCAN_MINUTES, default=data.get(CONF_SCAN_MINUTES, DEFAULT_SCAN_MINUTES)): int,
+                vol.Required(
+                    CONF_DEVICE_NAME,
+                    default=data.get(CONF_DEVICE_NAME, DEFAULT_DEVICE_NAME),
+                ): str,
+                vol.Required(
+                    CONF_LISTEN_PORT,
+                    default=data.get(CONF_LISTEN_PORT, DEFAULT_LISTEN_PORT),
+                ): int,
+                vol.Required(
+                    CONF_SCAN_MINUTES,
+                    default=data.get(CONF_SCAN_MINUTES, DEFAULT_SCAN_MINUTES),
+                ): int,
             }
         )
         return self.async_show_form(step_id="settings", data_schema=schema)
@@ -413,7 +435,11 @@ class AmbientOptionsFlow(OptionsFlow):
 
     def _pick_schema(self, default_ssid: str) -> vol.Schema:
         ssid_field: Any = vol.In(self._candidates) if self._candidates else str
-        default = default_ssid if (not self._candidates or default_ssid in self._candidates) else self._candidates[0]
+        default = (
+            default_ssid
+            if (not self._candidates or default_ssid in self._candidates)
+            else self._candidates[0]
+        )
         return vol.Schema(
             {
                 vol.Required("target_ssid", default=default): ssid_field,

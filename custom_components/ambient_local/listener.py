@@ -4,6 +4,7 @@ The console performs a periodic ``GET /?<field>=<value>&...`` (Ecowitt/AMBWeathe
 "Custom Server" style). We run our own aiohttp server so no separate add-on is
 required. HA Core uses host networking, so binding here is reachable on the LAN.
 """
+
 from __future__ import annotations
 
 import logging

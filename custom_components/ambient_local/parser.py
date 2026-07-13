@@ -2,6 +2,7 @@
 
 Also derives dew point and "feels like" from the base readings.
 """
+
 from __future__ import annotations
 
 import math

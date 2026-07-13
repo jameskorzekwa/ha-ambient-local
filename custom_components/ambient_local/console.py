@@ -7,6 +7,7 @@ The console exposes an (effectively unauthenticated) JSON API:
 On the "amb" platform the Protocol value is sent as "ecowitt" but stored as
 "amb_protocol"; that is expected and not a drift.
 """
+
 from __future__ import annotations
 
 import logging

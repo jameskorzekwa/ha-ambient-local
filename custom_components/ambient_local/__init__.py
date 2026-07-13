@@ -4,6 +4,7 @@ Runs its own HTTP listener for the console's data push (no add-on required) and
 keeps the console's "Custom Server" settings pointed at us, re-applying them if
 the console wipes them on reboot.
 """
+
 from __future__ import annotations
 
 import logging

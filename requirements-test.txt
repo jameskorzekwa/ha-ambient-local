@@ -1,0 +1,10 @@
+# Test/lint dependencies for ha-ambient-local.
+# The whole suite imports the integration package, whose __init__ imports Home
+# Assistant, so homeassistant + pytest-homeassistant-custom-component are always
+# required. The plugin pins a matching homeassistant release transitively.
+pytest
+pytest-asyncio
+aioresponses
+ruff
+
+pytest-homeassistant-custom-component==0.13.316
