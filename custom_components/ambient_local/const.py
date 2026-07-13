@@ -9,7 +9,9 @@ CONF_DEVICE_NAME = "device_name"
 CONF_SCAN_MINUTES = "scan_minutes"
 
 # Defaults
-DEFAULT_LISTEN_PORT = 8099
+# 7080 matches the port the console/old add-on already used, so no reconfigure
+# is needed on cutover. (Avoid 8099 — the SSH add-on's ttyd binds it.)
+DEFAULT_LISTEN_PORT = 7080
 DEFAULT_DEVICE_NAME = "Home"
 DEFAULT_SCAN_MINUTES = 5
 DEFAULT_UPLOAD_SECONDS = 60

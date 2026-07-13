@@ -1,7 +1,9 @@
 {
   "domain": "ambient_local",
   "name": "Ambient Weather Local",
-  "codeowners": ["@jameskorzekwa"],
+  "codeowners": [
+    "@jameskorzekwa"
+  ],
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/jameskorzekwa/ha-ambient-local",
@@ -9,5 +11,5 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/jameskorzekwa/ha-ambient-local/issues",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.1.1"
 }
