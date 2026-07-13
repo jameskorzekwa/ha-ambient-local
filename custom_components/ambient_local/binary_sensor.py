@@ -1,4 +1,5 @@
 """Binary sensors: battery status and console-config health."""
+
 from __future__ import annotations
 
 from homeassistant.components.binary_sensor import (
@@ -45,8 +46,7 @@ class AmbientBatteryLow(AmbientEntity, BinarySensorEntity):
     @property
     def available(self) -> bool:
         return (
-            self.coordinator.data_is_fresh
-            and "battery_low" in self.coordinator.sensors
+            self.coordinator.data_is_fresh and "battery_low" in self.coordinator.sensors
         )
 
 

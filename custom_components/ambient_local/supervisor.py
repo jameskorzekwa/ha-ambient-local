@@ -4,6 +4,7 @@ Used to drive a *spare* Wi-Fi radio on the host so we can join the console's
 setup access point and re-provision it. Only usable on HA OS / Supervised, and
 only when there is a wireless interface that isn't the primary connection.
 """
+
 from __future__ import annotations
 
 import logging
@@ -27,10 +28,14 @@ class SupervisorNetwork:
 
     def __init__(self, session: aiohttp.ClientSession) -> None:
         self._session = session
-        self._headers = {"Authorization": f"Bearer {os.environ.get('SUPERVISOR_TOKEN', '')}"}
+        self._headers = {
+            "Authorization": f"Bearer {os.environ.get('SUPERVISOR_TOKEN', '')}"
+        }
 
     async def _get(self, path: str) -> dict:
-        async with self._session.get(f"{_BASE}{path}", headers=self._headers, timeout=_TIMEOUT) as r:
+        async with self._session.get(
+            f"{_BASE}{path}", headers=self._headers, timeout=_TIMEOUT
+        ) as r:
             r.raise_for_status()
             return (await r.json()).get("data", {})
 

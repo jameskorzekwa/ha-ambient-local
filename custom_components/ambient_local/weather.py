@@ -1,4 +1,5 @@
 """Weather entity aggregating the station's readings."""
+
 from __future__ import annotations
 
 from homeassistant.components.weather import (

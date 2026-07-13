@@ -1,6 +1,8 @@
 """Coordinator: holds pushed data, self-heals the console, tracks staleness."""
+
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import datetime, timedelta
 
@@ -106,9 +108,7 @@ class AmbientCoordinator(DataUpdateCoordinator[dict]):
 
         self.station_mac = settings.get("sta_mac")
         await self._snapshot_config(settings)
-        ha_ip = await self.hass.async_add_executor_job(
-            detect_local_ip, self.client.ip
-        )
+        ha_ip = await self.hass.async_add_executor_job(detect_local_ip, self.client.ip)
         if not ha_ip:
             _LOGGER.debug("Could not determine local IP toward console")
             return
@@ -157,16 +157,12 @@ class AmbientCoordinator(DataUpdateCoordinator[dict]):
     async def _snapshot_config(self, ws_settings: dict) -> None:
         """Persist ws/network/device config (Wi-Fi password stripped)."""
         snap: dict = {"ws": ws_settings}
-        try:
+        with contextlib.suppress(ConsoleError):
             net = dict(await self.client.get_network_info())
             net.pop("wifi_pwd", None)  # don't persist the secret
             snap["network"] = net
-        except ConsoleError:
-            pass
-        try:
+        with contextlib.suppress(ConsoleError):
             snap["device"] = await self.client.get_device_info()
-        except ConsoleError:
-            pass
         if not self.station_mac:
             self.station_mac = (snap.get("network") or {}).get("mac")
         if self.console_ip:

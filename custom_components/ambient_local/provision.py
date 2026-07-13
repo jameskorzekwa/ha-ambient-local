@@ -6,6 +6,7 @@ serves its web UI at 192.168.4.1. We borrow the spare radio, join that AP, push
 the saved config (Wi-Fi creds, AmbientWeather.net email, our custom server),
 then release the radio.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -92,7 +93,7 @@ async def provision_via_ap(
     _LOGGER.info("Joining console setup AP '%s' on %s", ap_ssid, interface)
     try:
         await sup.join(interface, ap_ssid, psk=None)  # setup AP is open
-    except Exception as err:  # noqa: BLE001
+    except Exception as err:
         raise ProvisionError(f"Could not join the setup AP: {err}") from err
 
     try:
@@ -105,10 +106,14 @@ async def provision_via_ap(
             except ConsoleError:
                 await asyncio.sleep(2)
         else:
-            raise ProvisionError("Joined the AP but couldn't reach the console at " + AP_HOST)
+            raise ProvisionError(
+                "Joined the AP but couldn't reach the console at " + AP_HOST
+            )
 
-        cur_net = (cached.get("network") or {})
-        await ap_console.set_network_info(build_network_payload(cur_net, target_ssid, target_psk))
+        cur_net = cached.get("network") or {}
+        await ap_console.set_network_info(
+            build_network_payload(cur_net, target_ssid, target_psk)
+        )
         try:
             await ap_console.set_settings(
                 build_ws_payload(cached.get("ws") or {}, ha_ip, listen_port)
@@ -116,7 +121,9 @@ async def provision_via_ap(
         except ConsoleError as err:
             # network is the essential part; ws settings self-heal once it's back.
             _LOGGER.warning("Restored Wi-Fi but ws-settings push failed: %s", err)
-        _LOGGER.info("Console re-provisioned to '%s'; it will reboot onto Wi-Fi", target_ssid)
+        _LOGGER.info(
+            "Console re-provisioned to '%s'; it will reboot onto Wi-Fi", target_ssid
+        )
     finally:
         try:
             await sup.disable(interface)
@@ -124,7 +131,9 @@ async def provision_via_ap(
             _LOGGER.error("Failed to release %s after provisioning: %s", interface, err)
 
 
-def manual_instructions(cached: dict, ha_ip: str, listen_port: int, mac: str | None) -> str:
+def manual_instructions(
+    cached: dict, ha_ip: str, listen_port: int, mac: str | None
+) -> str:
     """Human steps for setting the console up by hand (no spare radio / fallback)."""
     ap = AP_SSID_PREFIX + (mac.replace(":", "")[-6:].upper() if mac else "XXXXXX")
     ws = cached.get("ws") or {}
@@ -140,6 +149,7 @@ def manual_instructions(cached: dict, ha_ip: str, listen_port: int, mac: str | N
         "5. **Weather Services →** set:\n"
         f"   - AmbientWeather.net email: **{email}**\n"
         "   - Customized: **Enable**, protocol **Ambient/Ecowitt**\n"
-        f"   - Server/IP **{ha_ip}**, Port **{listen_port}**, Path **{CONSOLE_PATH}**, Interval **60**\n"
+        f"   - Server/IP **{ha_ip}**, Port **{listen_port}**, "
+        f"Path **{CONSOLE_PATH}**, Interval **60**\n"
         "6. Save. The console reboots onto your Wi-Fi and data resumes within a minute."
     )
