@@ -80,26 +80,16 @@ class AmbientConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        # No IP is asked for — the console's address is learned from its data
+        # push. This step just collects a name and the listener port, then
+        # detects the console (AP setup if it's in AP mode, otherwise it's
+        # discovered from its data).
         if user_input is not None:
             self._pending = user_input
-            client = ConsoleClient(
-                async_get_clientsession(self.hass), user_input[CONF_CONSOLE_IP]
-            )
-            try:
-                # Fast probe so an offline console drops to AP setup quickly.
-                settings = await client.get_settings(timeout_s=4)
-            except ConsoleError:
-                # Console not on the network — offer AP-mode recovery/setup.
-                return await self.async_step_recover()
-            mac = settings.get("sta_mac")
-            if mac:
-                await self.async_set_unique_id(mac.lower())
-                self._abort_if_unique_id_configured()
-            return self._create()
+            return await self.async_step_detect()
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_CONSOLE_IP, default="192.168.0.50"): str,
                 vol.Required(CONF_DEVICE_NAME, default=DEFAULT_DEVICE_NAME): str,
                 vol.Required(CONF_LISTEN_PORT, default=DEFAULT_LISTEN_PORT): int,
                 vol.Required(CONF_SCAN_MINUTES, default=DEFAULT_SCAN_MINUTES): int,
@@ -107,49 +97,61 @@ class AmbientConfigFlow(ConfigFlow, domain=DOMAIN):
         )
         return self.async_show_form(step_id="user", data_schema=schema)
 
-    def _create(self) -> ConfigFlowResult:
+    async def _create(self) -> ConfigFlowResult:
+        cached = await _load_cache(self.hass)
+        mac = (cached.get("network") or {}).get("mac")
+        if mac:
+            await self.async_set_unique_id(mac.lower())
+            self._abort_if_unique_id_configured()
         return self.async_create_entry(
             title=self._pending.get(CONF_DEVICE_NAME, DEFAULT_DEVICE_NAME),
             data={
-                CONF_CONSOLE_IP: self._pending[CONF_CONSOLE_IP],
                 CONF_LISTEN_PORT: self._pending[CONF_LISTEN_PORT],
                 CONF_DEVICE_NAME: self._pending.get(CONF_DEVICE_NAME, DEFAULT_DEVICE_NAME),
                 CONF_SCAN_MINUTES: self._pending[CONF_SCAN_MINUTES],
             },
         )
 
-    async def _ha_ip(self) -> str:
-        ip = await self.hass.async_add_executor_job(
-            detect_local_ip, self._pending.get(CONF_CONSOLE_IP, "")
-        )
-        return ip or "<home-assistant-ip>"
+    async def _ha_ip(self, sup: SupervisorNetwork | None) -> str:
+        """Home Assistant's own LAN IP — for the console's Custom Server target."""
+        if sup is not None:
+            try:
+                info = await sup.info()
+                for iface in info.get("interfaces", []):
+                    if iface.get("primary"):
+                        addrs = (iface.get("ipv4") or {}).get("address") or []
+                        if addrs:
+                            return addrs[0].split("/")[0]
+            except Exception:  # noqa: BLE001
+                pass
+        return "<home-assistant-ip>"
 
-    async def async_step_recover(
+    async def async_step_detect(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """Provision over the console's AP if it's broadcasting; else await push."""
         session = async_get_clientsession(self.hass)
-        sup = SupervisorNetwork(session) if supervisor_available() else None
-        self._iface = await sup.spare_wifi_interface() if sup else None
-        if not self._iface:
-            return await self.async_step_manual()
-
-        try:
-            aps = await sup.scan(self._iface)
-        except Exception:  # noqa: BLE001
-            aps = []
         cached = await _load_cache(self.hass)
         mac = (cached.get("network") or {}).get("mac")
-        self._ap_ssid = find_setup_ap(aps, mac)
-        if not self._ap_ssid:
-            expected = AP_SSID_PREFIX + ((mac or "").replace(":", "")[-6:].upper() or "XXXXXX")
-            return self.async_show_form(
-                step_id="recover",
-                data_schema=vol.Schema({vol.Required("retry", default=True): bool}),
-                errors={"base": "ap_not_found"},
-                description_placeholders={"ap": expected},
-            )
-        self._candidates = _candidates(aps)
-        return await self.async_step_pick_wifi()
+
+        sup = SupervisorNetwork(session) if supervisor_available() else None
+        self._iface = await sup.spare_wifi_interface() if sup else None
+        if self._iface:
+            try:
+                aps = await sup.scan(self._iface)
+            except Exception:  # noqa: BLE001
+                aps = []
+            self._ap_ssid = find_setup_ap(aps, mac)
+            if self._ap_ssid:
+                self._candidates = _candidates(aps)
+                return await self.async_step_pick_wifi()
+
+        # No setup AP found (or no spare radio). The console is — or will be —
+        # on the network; HA discovers its IP from the first data push. If it
+        # needs a spare radio to recover but there is none, show manual steps.
+        if sup is not None and self._iface is None:
+            return await self.async_step_manual()
+        return await self._create()
 
     async def async_step_pick_wifi(
         self, user_input: dict[str, Any] | None = None
@@ -164,7 +166,7 @@ class AmbientConfigFlow(ConfigFlow, domain=DOMAIN):
                 await provision_via_ap(
                     session, sup, self._iface,
                     user_input["target_ssid"], user_input["target_psk"],
-                    cached, await self._ha_ip(), self._pending[CONF_LISTEN_PORT],
+                    cached, await self._ha_ip(sup), self._pending[CONF_LISTEN_PORT],
                 )
             except ProvisionError as err:
                 return self.async_show_form(
@@ -173,19 +175,9 @@ class AmbientConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors={"base": "provision_failed"},
                     description_placeholders={"error": str(err), "ap": self._ap_ssid},
                 )
-            # Wait for the console to reboot and rejoin the network.
-            client = ConsoleClient(session, self._pending[CONF_CONSOLE_IP])
-            for _ in range(12):
-                try:
-                    await client.get_settings()
-                    break
-                except ConsoleError:
-                    await asyncio.sleep(5)
-            mac = (cached.get("network") or {}).get("mac")
-            if mac:
-                await self.async_set_unique_id(mac.lower())
-                self._abort_if_unique_id_configured()
-            return self._create()
+            # The console reboots onto Wi-Fi and starts pushing to us; HA learns
+            # its IP from that push. No address is entered anywhere.
+            return await self._create()
 
         return self.async_show_form(
             step_id="pick_wifi",
@@ -196,9 +188,15 @@ class AmbientConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        if user_input is not None:
+            return await self._create()
+        session = async_get_clientsession(self.hass)
         cached = await _load_cache(self.hass)
         mac = (cached.get("network") or {}).get("mac")
-        text = manual_instructions(cached, await self._ha_ip(), self._pending[CONF_LISTEN_PORT], mac)
+        sup = SupervisorNetwork(session) if supervisor_available() else None
+        text = manual_instructions(
+            cached, await self._ha_ip(sup), self._pending[CONF_LISTEN_PORT], mac
+        )
         return self.async_show_form(
             step_id="manual",
             data_schema=vol.Schema({}),

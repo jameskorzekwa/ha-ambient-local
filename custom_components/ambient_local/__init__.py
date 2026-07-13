@@ -34,7 +34,8 @@ SERVICE_REAPPLY = "reapply_console_settings"
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     session = async_get_clientsession(hass)
-    client = ConsoleClient(session, entry.data[CONF_CONSOLE_IP])
+    # console_ip may be absent — it's auto-discovered from the console's push.
+    client = ConsoleClient(session, entry.data.get(CONF_CONSOLE_IP))
     port = entry.options.get(
         CONF_LISTEN_PORT, entry.data.get(CONF_LISTEN_PORT, DEFAULT_LISTEN_PORT)
     )

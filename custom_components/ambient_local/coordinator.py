@@ -44,6 +44,11 @@ class AmbientCoordinator(DataUpdateCoordinator[dict]):
         self.listen_port = listen_port
         self.upload_seconds = DEFAULT_UPLOAD_SECONDS
 
+        # The console's IP is learned from its data push (request source IP),
+        # so the user never supplies it. May be None until the first push.
+        self.console_ip: str | None = client.ip
+        self.on_ip_discovered = None  # callback(ip) to persist to the entry
+
         self.sensors: dict = {}
         self.last_push: datetime | None = None
         self.station_mac: str | None = None
@@ -57,12 +62,22 @@ class AmbientCoordinator(DataUpdateCoordinator[dict]):
 
     async def async_load_cache(self) -> None:
         self.cached = await self._store.async_load() or {}
+        # Restore last-known console IP so self-heal works before the first push.
+        if not self.console_ip and self.cached.get("ip"):
+            self.console_ip = self.cached["ip"]
+            self.client.set_ip(self.console_ip)
 
     @callback
-    def handle_push(self, raw: dict) -> None:
+    def handle_push(self, raw: dict, source_ip: str | None = None) -> None:
         """Called from the listener whenever the console sends data."""
         self.sensors = parse_payload(raw)
         self.last_push = dt_util.utcnow()
+        if source_ip and source_ip != self.console_ip:
+            _LOGGER.info("Discovered console IP from its data push: %s", source_ip)
+            self.console_ip = source_ip
+            self.client.set_ip(source_ip)
+            if self.on_ip_discovered is not None:
+                self.on_ip_discovered(source_ip)
         self.async_set_updated_data(self._snapshot())
 
     def _snapshot(self) -> dict:
@@ -79,6 +94,9 @@ class AmbientCoordinator(DataUpdateCoordinator[dict]):
 
     async def _ensure_console(self) -> None:
         """Read the console config and re-apply it if it has drifted/wiped."""
+        if not self.console_ip:
+            # IP not learned yet (no data push received). Nothing to check.
+            return
         try:
             settings = await self.client.get_settings()
         except ConsoleError as err:
@@ -151,6 +169,8 @@ class AmbientCoordinator(DataUpdateCoordinator[dict]):
             pass
         if not self.station_mac:
             self.station_mac = (snap.get("network") or {}).get("mac")
+        if self.console_ip:
+            snap["ip"] = self.console_ip
         self.cached = snap
         try:
             await self._store.async_save(snap)

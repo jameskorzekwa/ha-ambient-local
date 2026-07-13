@@ -31,8 +31,11 @@ class ConsoleClient:
         self._ip = ip
 
     @property
-    def ip(self) -> str:
+    def ip(self) -> str | None:
         return self._ip
+
+    def set_ip(self, ip: str) -> None:
+        self._ip = ip
 
     async def get_settings(self, timeout_s: float | None = None) -> dict:
         """Return the console's current weather-server settings.

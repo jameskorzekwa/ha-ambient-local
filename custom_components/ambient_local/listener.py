@@ -46,7 +46,9 @@ class PushListener:
             except Exception:  # noqa: BLE001 - malformed body, ignore
                 data = {}
         if data:
-            self._on_data(data)
+            # request.remote is the console's IP — we learn it from the push,
+            # so the user never has to supply an address.
+            self._on_data(data, request.remote)
         else:
             _LOGGER.debug("Received request with no data: %s", request.rel_url)
         return web.Response(text="OK")
