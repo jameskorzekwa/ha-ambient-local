@@ -1,0 +1,6 @@
+reapply_console_settings:
+  name: Re-apply console settings
+  description: >-
+    Force the integration to re-write the weather station console's Custom
+    Server settings so it points back at Home Assistant. Runs automatically on a
+    schedule; this is for manual recovery.
