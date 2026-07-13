@@ -21,7 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write        # commit the refreshed AGENTS.md to main
-      pull-requests: read
+      pull-requests: write   # claude-code-action GitHub integration
+      id-token: write        # claude-code-action mints its GitHub App token via OIDC
     steps:
       - name: Ensure Claude token is configured
         id: guard
