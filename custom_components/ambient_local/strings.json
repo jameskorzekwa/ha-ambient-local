@@ -1,21 +1,22 @@
 {
   "config": {
     "step": {
-      "user": {
-        "title": "Ambient Weather Local",
-        "description": "No IP address needed — Home Assistant learns the console's address from the data it sends. If the console is in AP mode (reset), HA will set it up over its access point; otherwise it's detected automatically once it's on your network.",
+      "provision": {
+        "title": "Set up your weather station",
+        "description": "Home Assistant is looking for the console's setup network **{ap}** on a spare Wi-Fi radio. Put the console in AP mode (hold the Wi-Fi/Sensor button ~6 s until 'AP' shows), then scan again.",
         "data": {
-          "device_name": "Device name",
-          "listen_port": "Listener port",
-          "scan_minutes": "Console check interval (minutes)"
+          "retry": "Scan again"
         }
       },
-      "pick_wifi": {
-        "title": "Choose the console's Wi-Fi",
-        "description": "Found the console's setup network **{ap}**. Pick the 2.4 GHz Wi-Fi it should join and enter its password. Home Assistant will provision it and finish setup automatically.",
+      "setup": {
+        "title": "Connect your weather station",
+        "description": "Connected to the console's setup network **{ap}**. Choose the Wi-Fi it should join and confirm the details — Home Assistant configures the console and it comes online on its own (no IP address needed).",
         "data": {
           "target_ssid": "Wi-Fi network (2.4 GHz)",
-          "target_psk": "Wi-Fi password"
+          "target_psk": "Wi-Fi password",
+          "device_name": "Device name",
+          "listen_port": "Listener port",
+          "amb_email": "AmbientWeather.net email (optional)"
         }
       },
       "manual": {
@@ -24,9 +25,9 @@
       }
     },
     "error": {
-      "cannot_connect": "Could not reach the console at that IP address.",
-      "ap_not_found": "Didn't see the console's setup network yet. Put it in AP mode and scan again.",
-      "provision_failed": "Provisioning failed: {error}"
+      "ap_not_found": "Couldn't find the console's setup network. Put it in AP mode and scan again.",
+      "ap_join_failed": "Found the console's network but couldn't connect to it. Try again.",
+      "provision_failed": "Setup failed: {error}"
     },
     "abort": {
       "already_configured": "This weather station is already configured."
