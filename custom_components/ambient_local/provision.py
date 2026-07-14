@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
+from dataclasses import dataclass
+from typing import Protocol
 
 from .console import ConsoleClient, ConsoleError
 from .const import AP_HOST, AP_SSID_PREFIX, CONSOLE_PATH
@@ -19,9 +22,54 @@ from .supervisor import SupervisorNetwork
 
 _LOGGER = logging.getLogger(__name__)
 
+# How long to wait for the console to reboot onto the chosen Wi-Fi and reach us.
+# Cold reboot + DHCP + first upload is typically 20-40 s; 90 s is a safe ceiling.
+VERIFY_TIMEOUT_S = 90
+# When no push arrives, probe whether the console fell back to its setup AP
+# (which means the Wi-Fi join failed and it's still recoverable).
+REJOIN_ATTEMPTS = 8
+REJOIN_INTERVAL_S = 2
+# Confirming the console answers on its AP right after we associate to it.
+AP_REACH_ATTEMPTS = 15
+AP_REACH_INTERVAL_S = 2
 
-class ProvisionError(Exception):
-    """Recoverable provisioning failure with a human-readable message."""
+# Outcome codes from provision_and_verify(); each maps to a user-facing message.
+OK = "ok"  # console reached Home Assistant — safe to commit
+PROVISION_FAILED = "provision_failed"  # console rejected settings over the AP (retry)
+JOIN_FAILED = "join_failed"  # console fell back to AP mode — Wi-Fi join failed (retry)
+UNREACHABLE = (
+    "unreachable"  # console left AP mode but can't reach HA (needs user action)
+)
+PORT_BUSY = "port_busy"  # our listener port is already in use (pick another, retry)
+
+
+class PushWatcher(Protocol):
+    """Watches for the console's first data push after it joins the Wi-Fi.
+
+    Entered (``async with``) *before* the radio is released so no early push is
+    missed; ``wait`` returns the console's source IP, or None on timeout.
+    """
+
+    async def __aenter__(self) -> PushWatcher: ...
+
+    async def __aexit__(self, *exc: object) -> None: ...
+
+    async def wait(self, timeout: float) -> str | None: ...  # noqa: ASYNC109
+
+
+@dataclass
+class ProvisionResult:
+    """Outcome of a verified provisioning attempt."""
+
+    status: str
+    console_ip: str | None = None
+    detail: str = ""
+
+
+async def _safe_disable(sup: SupervisorNetwork, interface: str) -> None:
+    """Release the borrowed radio, never raising — we must not strand it enabled."""
+    with contextlib.suppress(Exception):
+        await sup.disable(interface)
 
 
 def b64(value: str) -> str:
@@ -67,68 +115,114 @@ def build_ws_payload(cached_ws: dict, ha_ip: str, listen_port: int) -> dict:
     }
 
 
-async def provision_via_ap(
+async def join_and_reach(
+    session, sup: SupervisorNetwork, interface: str, ap_ssid: str
+) -> bool:
+    """Associate ``interface`` to the console's open setup AP and confirm it answers."""
+    try:
+        await sup.join(interface, ap_ssid, psk=None)
+    except Exception as err:  # noqa: BLE001 - supervisor/radio errors are all "no"
+        _LOGGER.debug("Could not join setup AP '%s': %s", ap_ssid, err)
+        return False
+    ap_console = ConsoleClient(session, AP_HOST)
+    for _ in range(AP_REACH_ATTEMPTS):
+        try:
+            await ap_console.get_device_info()
+            return True
+        except ConsoleError:
+            await asyncio.sleep(AP_REACH_INTERVAL_S)
+    return False
+
+
+async def push_settings_over_ap(
+    session,
+    cached: dict,
+    target_ssid: str,
+    target_psk: str,
+    ha_ip: str,
+    listen_port: int,
+) -> None:
+    """Push Wi-Fi creds (required) + Custom Server settings (best effort) over the AP.
+
+    Assumes we're already associated to the console's AP. Raises ConsoleError only
+    if the essential Wi-Fi push fails; a failed ws-settings push is tolerated
+    because the coordinator self-heals it once the console is back on the LAN.
+    """
+    ap_console = ConsoleClient(session, AP_HOST)
+    await ap_console.set_network_info(
+        build_network_payload(cached.get("network") or {}, target_ssid, target_psk)
+    )
+    try:
+        await ap_console.set_settings(
+            build_ws_payload(cached.get("ws") or {}, ha_ip, listen_port)
+        )
+    except ConsoleError as err:
+        _LOGGER.warning("Wi-Fi creds pushed but ws-settings push failed: %s", err)
+
+
+async def classify_after_timeout(
+    session, sup: SupervisorNetwork, interface: str, ap_ssid: str
+) -> str:
+    """No push arrived — decide whether it's recoverable, and release the radio.
+
+    If the console's setup AP is broadcasting again, its Wi-Fi join failed and it
+    fell back to AP mode (JOIN_FAILED — the user can retry). If we can't get back
+    to it, the console joined a network it can reach but Home Assistant can't
+    (UNREACHABLE — needs the user to re-enter setup and pick a same-LAN network).
+    """
+    ap_console = ConsoleClient(session, AP_HOST)
+    try:
+        for _ in range(REJOIN_ATTEMPTS):
+            try:
+                await sup.join(interface, ap_ssid, psk=None)
+                await ap_console.get_device_info()
+                return JOIN_FAILED
+            except Exception:  # noqa: BLE001 - AP not back yet; keep probing
+                await asyncio.sleep(REJOIN_INTERVAL_S)
+        return UNREACHABLE
+    finally:
+        await _safe_disable(sup, interface)
+
+
+async def provision_and_verify(
     session,
     sup: SupervisorNetwork,
     interface: str,
+    ap_ssid: str,
     target_ssid: str,
     target_psk: str,
     cached: dict,
     ha_ip: str,
     listen_port: int,
-) -> None:
-    """Borrow ``interface``, join the console's AP, push config, then release it.
+    watcher: PushWatcher,
+) -> ProvisionResult:
+    """Provision the console, release the radio, and verify it can reach us.
 
-    ``cached`` holds the last-known network/ws snapshots. Raises ProvisionError.
+    Assumes we're already associated to the console's setup AP. Order matters:
+    the watcher is armed *before* the radio is released so the console's first
+    push can't slip through. The borrowed radio is always released, on every
+    path, so the host is never left in a bad state.
     """
-    mac = (cached.get("network") or {}).get("mac")
-    aps = await sup.scan(interface)
-    ap_ssid = find_setup_ap(aps, mac)
-    if not ap_ssid:
-        raise ProvisionError(
-            "The console's setup network wasn't found. Put it in AP mode (hold "
-            "the Wi-Fi button ~6s until 'AP' shows) and try again."
-        )
-
-    _LOGGER.info("Joining console setup AP '%s' on %s", ap_ssid, interface)
-    try:
-        await sup.join(interface, ap_ssid, psk=None)  # setup AP is open
-    except Exception as err:
-        raise ProvisionError(f"Could not join the setup AP: {err}") from err
-
-    try:
-        ap_console = ConsoleClient(session, AP_HOST)
-        # wait for the AP link + DHCP, confirmed by reaching the console
-        for _ in range(15):
-            try:
-                await ap_console.get_device_info()
-                break
-            except ConsoleError:
-                await asyncio.sleep(2)
-        else:
-            raise ProvisionError(
-                "Joined the AP but couldn't reach the console at " + AP_HOST
-            )
-
-        cur_net = cached.get("network") or {}
-        await ap_console.set_network_info(
-            build_network_payload(cur_net, target_ssid, target_psk)
-        )
+    async with watcher:  # arm the push watcher first (may bind a listener)
         try:
-            await ap_console.set_settings(
-                build_ws_payload(cached.get("ws") or {}, ha_ip, listen_port)
+            await push_settings_over_ap(
+                session, cached, target_ssid, target_psk, ha_ip, listen_port
             )
         except ConsoleError as err:
-            # network is the essential part; ws settings self-heal once it's back.
-            _LOGGER.warning("Restored Wi-Fi but ws-settings push failed: %s", err)
-        _LOGGER.info(
-            "Console re-provisioned to '%s'; it will reboot onto Wi-Fi", target_ssid
-        )
-    finally:
-        try:
-            await sup.disable(interface)
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.error("Failed to release %s after provisioning: %s", interface, err)
+            await _safe_disable(sup, interface)
+            return ProvisionResult(PROVISION_FAILED, detail=str(err))
+
+        # Release the radio: the console drops its AP, reboots, and joins the Wi-Fi.
+        await _safe_disable(sup, interface)
+        console_ip = await watcher.wait(VERIFY_TIMEOUT_S)
+
+    if console_ip:
+        return ProvisionResult(OK, console_ip=console_ip)
+
+    # Nothing reached us in time — work out why, and clean up the radio.
+    return ProvisionResult(
+        await classify_after_timeout(session, sup, interface, ap_ssid)
+    )
 
 
 def manual_instructions(

@@ -8,13 +8,19 @@ from aioresponses import aioresponses
 
 from custom_components.ambient_local.const import AP_HOST
 from custom_components.ambient_local.provision import (
-    ProvisionError,
+    JOIN_FAILED,
+    OK,
+    PROVISION_FAILED,
+    UNREACHABLE,
     b64,
     build_network_payload,
     build_ws_payload,
+    classify_after_timeout,
     find_setup_ap,
+    join_and_reach,
     manual_instructions,
-    provision_via_ap,
+    provision_and_verify,
+    push_settings_over_ap,
 )
 
 MAC = "08:F9:E0:51:35:AE"
@@ -80,44 +86,208 @@ def test_manual_instructions_without_mac():
     assert "AMBWeatherPro-XXXXXX" in txt
 
 
-# --- provision_via_ap (integration, with fakes) ------------------------------
+# --- verified provisioning (integration, with fakes) -------------------------
 
 
 class _FakeSup:
-    def __init__(self, aps):
-        self._aps = aps
-        self.joined = None
-        self.disabled = False
+    """Records radio join/disable calls; join can be made to fail."""
 
-    async def scan(self, interface):
-        return self._aps
+    def __init__(self, join_raises: bool = False):
+        self.join_raises = join_raises
+        self.joined: list = []
+        self.disabled = 0
 
     async def join(self, interface, ssid, psk=None):
-        self.joined = (interface, ssid, psk)
+        if self.join_raises:
+            raise RuntimeError("radio busy")
+        self.joined.append((interface, ssid, psk))
 
     async def disable(self, interface):
-        self.disabled = True
+        self.disabled += 1
 
 
-async def test_provision_via_ap_happy_path(cached_config):
-    sup = _FakeSup([{"ssid": "AMBWeatherPro-5135AE"}])
+class _FakeWatcher:
+    """Push watcher stub: ``wait`` yields a preset console IP (or None=timeout)."""
+
+    def __init__(self, ip: str | None):
+        self._ip = ip
+        self.entered = False
+
+    async def __aenter__(self):
+        self.entered = True
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
+    async def wait(self, timeout):  # noqa: ASYNC109
+        return self._ip
+
+
+@pytest.fixture
+def _fast(monkeypatch):
+    """Collapse retry/poll sleeps so timeout paths run instantly."""
+    import custom_components.ambient_local.provision as prov
+
+    monkeypatch.setattr(prov, "REJOIN_ATTEMPTS", 2)
+    monkeypatch.setattr(prov, "REJOIN_INTERVAL_S", 0)
+    monkeypatch.setattr(prov, "AP_REACH_ATTEMPTS", 2)
+    monkeypatch.setattr(prov, "AP_REACH_INTERVAL_S", 0)
+
+
+async def test_join_and_reach_ok(_fast):
+    sup = _FakeSup()
     async with aiohttp.ClientSession() as session:
         with aioresponses() as m:
             m.get(f"http://{AP_HOST}/get_device_info", payload={"apName": "x"})
+            assert await join_and_reach(session, sup, "wlan1", "AMBWeatherPro-5135AE")
+    assert sup.joined == [("wlan1", "AMBWeatherPro-5135AE", None)]  # open AP
+
+
+async def test_join_and_reach_join_error(_fast):
+    sup = _FakeSup(join_raises=True)
+    async with aiohttp.ClientSession() as session:
+        assert await join_and_reach(session, sup, "wlan1", "AP") is False
+
+
+async def test_join_and_reach_unreachable(_fast):
+    sup = _FakeSup()
+    async with aiohttp.ClientSession() as session:
+        with aioresponses() as m:
+            m.get(
+                f"http://{AP_HOST}/get_device_info",
+                exception=aiohttp.ClientError(),
+                repeat=True,
+            )
+            assert await join_and_reach(session, sup, "wlan1", "AP") is False
+
+
+async def test_push_settings_over_ap_ok(cached_config):
+    async with aiohttp.ClientSession() as session:
+        with aioresponses() as m:
             m.post(f"http://{AP_HOST}/set_network_info", status=200)
             m.post(f"http://{AP_HOST}/set_ws_settings", status=200)
-            await provision_via_ap(
-                session, sup, "wlan1", "IoT", "pw", cached_config, "192.168.1.126", 7080
+            await push_settings_over_ap(
+                session, cached_config, "IoT", "pw", "1.2.3.4", 7080
             )
-    assert sup.joined == ("wlan1", "AMBWeatherPro-5135AE", None)  # open AP
-    assert sup.disabled is True  # radio released in finally
 
 
-async def test_provision_via_ap_no_ap_found(cached_config):
-    sup = _FakeSup([{"ssid": "IoT"}])  # no setup AP
+async def test_push_settings_over_ap_network_fails(cached_config):
+    from custom_components.ambient_local.console import ConsoleError
+
     async with aiohttp.ClientSession() as session:
-        with pytest.raises(ProvisionError, match="setup network"):
-            await provision_via_ap(
-                session, sup, "wlan1", "IoT", "pw", cached_config, "192.168.1.126", 7080
+        with aioresponses() as m:
+            m.post(f"http://{AP_HOST}/set_network_info", status=500)
+            with pytest.raises(ConsoleError):  # Wi-Fi push is the essential part
+                await push_settings_over_ap(
+                    session, cached_config, "IoT", "pw", "1.2.3.4", 7080
+                )
+
+
+async def test_push_settings_over_ap_ws_failure_tolerated(cached_config):
+    async with aiohttp.ClientSession() as session:
+        with aioresponses() as m:
+            m.post(f"http://{AP_HOST}/set_network_info", status=200)
+            m.post(f"http://{AP_HOST}/set_ws_settings", status=500)  # self-heals
+            await push_settings_over_ap(
+                session, cached_config, "IoT", "pw", "1.2.3.4", 7080
             )
-    assert sup.joined is None  # never tried to join
+
+
+async def test_classify_join_failed(_fast):
+    """AP is back -> the console fell back to setup mode (recoverable)."""
+    sup = _FakeSup()
+    async with aiohttp.ClientSession() as session:
+        with aioresponses() as m:
+            m.get(f"http://{AP_HOST}/get_device_info", payload={"apName": "x"})
+            assert (
+                await classify_after_timeout(session, sup, "wlan1", "AP") == JOIN_FAILED
+            )
+    assert sup.disabled == 1  # radio released
+
+
+async def test_classify_unreachable(_fast):
+    """AP never comes back -> console is on a network we can't reach."""
+    sup = _FakeSup()
+    async with aiohttp.ClientSession() as session:
+        with aioresponses() as m:
+            m.get(
+                f"http://{AP_HOST}/get_device_info",
+                exception=aiohttp.ClientError(),
+                repeat=True,
+            )
+            assert (
+                await classify_after_timeout(session, sup, "wlan1", "AP") == UNREACHABLE
+            )
+    assert sup.disabled == 1
+
+
+async def test_provision_and_verify_ok(cached_config, _fast):
+    sup = _FakeSup()
+    watcher = _FakeWatcher("192.168.1.50")  # console reached us
+    async with aiohttp.ClientSession() as session:
+        with aioresponses() as m:
+            m.post(f"http://{AP_HOST}/set_network_info", status=200)
+            m.post(f"http://{AP_HOST}/set_ws_settings", status=200)
+            result = await provision_and_verify(
+                session,
+                sup,
+                "wlan1",
+                "AP",
+                "IoT",
+                "pw",
+                cached_config,
+                "1.2.3.4",
+                7080,
+                watcher,
+            )
+    assert result.status == OK
+    assert result.console_ip == "192.168.1.50"
+    assert watcher.entered is True
+    assert sup.disabled >= 1  # radio released before we waited
+
+
+async def test_provision_and_verify_push_fails(cached_config, _fast):
+    sup = _FakeSup()
+    watcher = _FakeWatcher(None)
+    async with aiohttp.ClientSession() as session:
+        with aioresponses() as m:
+            m.post(f"http://{AP_HOST}/set_network_info", status=500)  # console rejects
+            result = await provision_and_verify(
+                session,
+                sup,
+                "wlan1",
+                "AP",
+                "IoT",
+                "pw",
+                cached_config,
+                "1.2.3.4",
+                7080,
+                watcher,
+            )
+    assert result.status == PROVISION_FAILED
+    assert sup.disabled >= 1
+
+
+async def test_provision_and_verify_timeout_join_failed(cached_config, _fast):
+    """No push -> classify re-joins the AP and finds it back (JOIN_FAILED)."""
+    sup = _FakeSup()
+    watcher = _FakeWatcher(None)  # nothing reached us
+    async with aiohttp.ClientSession() as session:
+        with aioresponses() as m:
+            m.post(f"http://{AP_HOST}/set_network_info", status=200)
+            m.post(f"http://{AP_HOST}/set_ws_settings", status=200)
+            m.get(f"http://{AP_HOST}/get_device_info", payload={"apName": "x"})
+            result = await provision_and_verify(
+                session,
+                sup,
+                "wlan1",
+                "AP",
+                "IoT",
+                "pw",
+                cached_config,
+                "1.2.3.4",
+                7080,
+                watcher,
+            )
+    assert result.status == JOIN_FAILED
