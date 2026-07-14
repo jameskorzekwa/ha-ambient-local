@@ -1,0 +1,113 @@
+name: CI & Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "AGENTS.md"
+      - "**/AGENTS.md"
+      - "README.md"
+  pull_request:
+    paths-ignore:
+      - "AGENTS.md"
+      - "**/AGENTS.md"
+      - "README.md"
+  schedule:
+    - cron: "0 6 * * 1"  # weekly, catches upstream HA/HACS rule changes
+
+permissions:
+  contents: write
+
+jobs:
+  lint-and-test:
+    name: Lint & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt
+      - name: Ruff lint
+        run: ruff check custom_components tests
+      - name: Ruff format check
+        run: ruff format --check custom_components tests
+      - name: Pytest
+        run: pytest
+
+  hassfest:
+    name: Hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+
+  release:
+    name: Release
+    needs: [lint-and-test, hassfest, hacs]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide release version
+        id: ver
+        shell: bash
+        run: |
+          manifest=custom_components/ambient_local/manifest.json
+          current=$(jq -r '.version' "$manifest")
+          if git rev-parse -q --verify "refs/tags/v${current}" >/dev/null; then
+            # already released -> bump the patch
+            IFS='.' read -r major minor patch <<< "$current"
+            new="${major}.${minor}.$((patch + 1))"
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+          else
+            # manifest version not tagged yet -> release it as-is
+            new="$current"
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+          echo "Releasing v${new} (from manifest ${current})"
+
+      - name: Commit version bump
+        if: steps.ver.outputs.bumped == 'true'
+        shell: bash
+        run: |
+          manifest=custom_components/ambient_local/manifest.json
+          jq --arg v "${{ steps.ver.outputs.new }}" '.version = $v' "$manifest" > tmp.json
+          mv tmp.json "$manifest"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$manifest"
+          git commit -m "Bump version to ${{ steps.ver.outputs.new }}"
+          git pull --rebase origin main
+          git push
+
+      - name: Zip integration for HACS
+        run: |
+          cd custom_components/ambient_local
+          zip -r ../../ambient_local.zip . -x "__pycache__/*" "*.pyc"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.new }}
+          name: v${{ steps.ver.outputs.new }}
+          generate_release_notes: true
+          files: ambient_local.zip
