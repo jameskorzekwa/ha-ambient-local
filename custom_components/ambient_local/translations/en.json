@@ -10,7 +10,7 @@
       },
       "setup": {
         "title": "Connect your weather station",
-        "description": "Connected to the console's setup network **{ap}**. Choose the Wi-Fi it should join and confirm the details — Home Assistant configures the console and it comes online on its own (no IP address needed).",
+        "description": "Connected to the console's setup network **{ap}**. Choose the Wi-Fi it should join (must be 2.4 GHz and on the same network as Home Assistant) and confirm the details. Home Assistant configures the console, then waits to confirm it comes online — no IP address needed.",
         "data": {
           "target_ssid": "Wi-Fi network (2.4 GHz)",
           "target_psk": "Wi-Fi password",
@@ -19,18 +19,28 @@
           "amb_email": "AmbientWeather.net email (optional)"
         }
       },
+      "retry": {
+        "title": "Couldn't finish setup",
+        "description": "{reason}\n\nMake sure the console still shows **AP** on its screen (hold the **Wi-Fi/Sensor** button ~6 s until it does), then continue to reconnect and re-enter the details.",
+        "data": {
+          "retry": "Try again"
+        }
+      },
       "manual": {
         "title": "Manual setup",
         "description": "{instructions}"
       }
     },
+    "progress": {
+      "verify": "Waiting for the console to reboot, join **{ssid}**, and reach Home Assistant. This can take up to a minute…"
+    },
     "error": {
       "ap_not_found": "Couldn't find the console's setup network. Put it in AP mode and scan again.",
-      "ap_join_failed": "Found the console's network but couldn't connect to it. Try again.",
-      "provision_failed": "Setup failed: {error}"
+      "ap_join_failed": "Found the console's network but couldn't connect to it. Try again."
     },
     "abort": {
-      "already_configured": "This weather station is already configured."
+      "already_configured": "This weather station is already configured.",
+      "console_unreachable": "The console joined **{ssid}** and left setup mode, but it can't reach Home Assistant — so it can't send data. **{ssid}** is probably on a different network or VLAN than Home Assistant (common for 'IoT' or 'Guest' Wi-Fi).\n\nTo fix it:\n1. On the console, hold the **Wi-Fi/Sensor** button ~6 s until **AP** shows.\n2. Start setup again and choose a 2.4 GHz network on the **same** network as Home Assistant (Home Assistant is at **{ha_ip}**).\n\nNothing was changed in Home Assistant."
     }
   },
   "options": {
@@ -59,10 +69,17 @@
       },
       "pick": {
         "title": "Choose the console's Wi-Fi",
-        "description": "Found the console's setup network **{ap}**. Pick the 2.4 GHz Wi-Fi it should join and enter its password. Home Assistant will provision it and restore your settings.",
+        "description": "Found the console's setup network **{ap}**. Pick the 2.4 GHz Wi-Fi it should join (must be on the same network as Home Assistant) and enter its password. Home Assistant will provision it, then wait to confirm it comes back online.",
         "data": {
           "target_ssid": "Wi-Fi network (2.4 GHz)",
           "target_psk": "Wi-Fi password"
+        }
+      },
+      "retry": {
+        "title": "Couldn't finish recovery",
+        "description": "{reason}\n\nMake sure the console still shows **AP** on its screen (hold the **Wi-Fi/Sensor** button ~6 s until it does), then continue to try again.",
+        "data": {
+          "retry": "Try again"
         }
       },
       "manual": {
@@ -70,12 +87,15 @@
         "description": "{instructions}"
       }
     },
+    "progress": {
+      "verify": "Waiting for the console to reboot, join **{ssid}**, and reach Home Assistant. This can take up to a minute…"
+    },
     "error": {
-      "ap_not_found": "Didn't see the console's setup network yet. Put it in AP mode and scan again.",
-      "provision_failed": "Provisioning failed: {error}"
+      "ap_not_found": "Didn't see the console's setup network yet. Put it in AP mode and scan again."
     },
     "abort": {
-      "provision_done": "Sent the new settings. The console is rebooting onto your Wi-Fi — data should resume within a minute."
+      "provision_done": "The console reached Home Assistant on **{ssid}** and data has resumed. All set.",
+      "console_unreachable": "The console joined **{ssid}** and left setup mode, but it can't reach Home Assistant — so it can't send data. **{ssid}** is probably on a different network or VLAN than Home Assistant (common for 'IoT' or 'Guest' Wi-Fi).\n\nTo fix it:\n1. On the console, hold the **Wi-Fi/Sensor** button ~6 s until **AP** shows.\n2. Run Recover again and choose a 2.4 GHz network on the **same** network as Home Assistant (Home Assistant is at **{ha_ip}**).\n\nYour existing configuration was left unchanged."
     }
   },
   "services": {
